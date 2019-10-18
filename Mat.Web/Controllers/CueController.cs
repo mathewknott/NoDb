@@ -12,7 +12,6 @@ using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Newtonsoft.Json;
 using NoDb;
 
 namespace Mat.Web.Controllers
@@ -20,7 +19,9 @@ namespace Mat.Web.Controllers
     /// <summary>
     /// 
     /// </summary>
-    public class CueController : Controller
+    [ApiController]
+    [Route("cue")]
+    public class CueController : ControllerBase
     {
         private readonly IBasicQueries<Question> _pageQueriesQuestion;
         private readonly IBasicCommands<Question> _pageCommandsQuestion;
@@ -62,7 +63,7 @@ namespace Mat.Web.Controllers
         /// </summary>
         /// <returns></returns>
         [HttpGet("/cue/GetCategories", Name = "Get Categories")]
-        public async Task<IActionResult> GetCategories()
+        public async Task<JsonPagedResult<IEnumerable<Category>>> GetCategories()
         {
             var results = await _pageQueriesCategory.GetAllAsync("Cues");
             
@@ -70,17 +71,27 @@ namespace Mat.Web.Controllers
 
             if (!enumerable.Any())
             {
-                return Json(new JsonPagedResult<IEnumerable<Category>>
+                return new JsonPagedResult<IEnumerable<Category>>
                 {
                     Total = 0
-                });
+                };
             }
 
-            return Json(new JsonPagedResult<IEnumerable<Category>>
+            return new JsonPagedResult<IEnumerable<Category>>
             {
                 Total = enumerable.Count,
                 Rows = enumerable
-            });
+            };
+        }
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <returns></returns>
+        [HttpGet("/cue/GetCategory", Name = "Get Category")]
+        public Category GetCategory(int id)
+        {
+            return _pageQueriesCategory.GetAllAsync("Cues").Result.FirstOrDefault(x =>x.Id.Equals(id.ToString()));
         }
 
         /// <summary>
@@ -89,30 +100,29 @@ namespace Mat.Web.Controllers
         /// <param name="category"></param>
         /// <returns></returns>
         [HttpPost("/cue/CreateCategory", Name = "Create Category")]
-        [IgnoreAntiforgeryToken]
-        public async Task<IActionResult> CreateCategory(Category category)
+
+        public async Task<IActionResult> CreateCategory([FromBody] Category category)
         {
-            if (ModelState.IsValid)
+            category.Id = new Random().Next(0, 100000000);
+
+            category.InternalName = category.Title.ToSlug();
+
+            if (category.ParentCategoryId == 0)
             {
-                category.Id = new Random().Next(0, 100000000);
-                category.InternalName = category.Title.ToSlug();
+                await _pageCommandsCategory.CreateAsync("Cues", category.Id.ToString(), category);
 
-                if (category.ParentCategoryId == 0)
-                {
-                    await _pageCommandsCategory.CreateAsync("Cues", category.Id.ToString(), category);
-                    return Content("success");
-                }
-
-                var findParent = await _pageQueriesCategory.FetchAsync("Cues", category.ParentCategoryId.ToString());
-
-                if (findParent != null)
-                {
-                    await _pageCommandsCategory.CreateAsync("Cues", category.Id.ToString(), category);
-                    return Content("success");
-                }
-                ModelState.AddModelError("CreateCategory", "Cannot find the parent Category");
+                return CreatedAtAction("GetCategory", new { id = category.Id }, category);
             }
-            return Json(new { success = "fail", errorList = JsonConvert.SerializeObject(ModelState.Values.Where(x => x.Errors.Count > 0), Formatting.None, new JsonSerializerSettings { ReferenceLoopHandling = ReferenceLoopHandling.Ignore }) });
+
+            var findParent = await _pageQueriesCategory.FetchAsync("Cues", category.ParentCategoryId.ToString());
+
+            if (findParent != null)
+            {
+                await _pageCommandsCategory.CreateAsync("Cues", category.Id.ToString(), category);
+                return CreatedAtAction("GetCategory", new { id = category.Id }, category);
+            }
+
+            return BadRequest();
         }
 
         /// <summary>
@@ -121,32 +131,23 @@ namespace Mat.Web.Controllers
         /// <param name="category"></param>
         /// <returns></returns>
         [HttpPut("/cue/UpdateCategory", Name = "Update Category")]
-        [IgnoreAntiforgeryToken]
-        public async Task<IActionResult> UpdateCategory([FromBody] Category category)
+
+        public async Task<ActionResult<string>> UpdateCategory([FromBody] Category category)
         {
-            if (ModelState.IsValid)
+            var c = _pageQueriesCategory.FetchAsync("Cues", category.Id.ToString()).Result;
+
+            if (c != null)
             {
-                var c = _pageQueriesCategory.FetchAsync("Cues", category.Id.ToString()).Result;
-
-                if (c != null)
-                {
-                    c.Title = category.Title;
-                    c.InternalName = c.Title.ToSlug();
-                    c.ParentCategoryId = category.ParentCategoryId == 0 ? c.ParentCategoryId : category.ParentCategoryId;
-                    await _pageCommandsCategory.UpdateAsync("Cues", c.Id.ToString(), c);
-                }
-                else
-                {
-                    return Json(new
-                    {
-                        success = "fail",
-                        errorList = "Could not find Category Id"
-                    });
-                }
-
-                return Content("success");
+                c.Title = category.Title;
+                c.InternalName = c.Title.ToSlug();
+                c.ParentCategoryId = category.ParentCategoryId == 0 ? c.ParentCategoryId : category.ParentCategoryId;
+                await _pageCommandsCategory.UpdateAsync("Cues", c.Id.ToString(), c);
+                return new NoContentResult();
             }
-            return Json(new { success = "fail", errorList = JsonConvert.SerializeObject(ModelState.Values.Where(x => x.Errors.Count > 0), Formatting.None, new JsonSerializerSettings { ReferenceLoopHandling = ReferenceLoopHandling.Ignore }) });
+            else
+            {
+                return NotFound();
+            }
         }
         
         /// <summary>
@@ -154,24 +155,35 @@ namespace Mat.Web.Controllers
         /// </summary>
         /// <returns></returns>
         [HttpGet("/cue/GetAllQuestions", Name = "Get All Category Questions")]
-        public async Task<IActionResult> GetAllQuestions(bool randomise = false)
+        public async Task<ActionResult<JsonPagedResult<IEnumerable<Question>>>> GetAllQuestions(bool randomise = false)
         {
             var results = await _pageQueriesQuestion.GetAllAsync("Cues");
             var list = randomise ? results.OrderBy(x => x.Sequence).ToList() : results.ToList();
 
             if (!list.Any())
             {
-                return Json(new JsonPagedResult<IEnumerable<Question>>
+                return new JsonPagedResult<IEnumerable<Question>>
                 {
                     Total = 0
-                });
+                };
             }
 
-            return Json(new JsonPagedResult<IEnumerable<Question>>
+            return new JsonPagedResult<IEnumerable<Question>>
             {
                 Total = list.Count,
                 Rows = list
-            });
+            };
+        }
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="id"></param>
+        /// <returns></returns>
+        [HttpGet("/cue/GetQuestion", Name = "Get Question")]
+        public Question GetCategoryQuestions(int id)
+        {
+            return _pageQueriesQuestion.GetAllAsync("Cues").Result.FirstOrDefault(x =>x.Id.Equals(id));
         }
 
         /// <summary>
@@ -181,7 +193,7 @@ namespace Mat.Web.Controllers
         /// <param name="randomise"></param>
         /// <returns></returns>
         [HttpGet("/cue/GetCategoryQuestions", Name = "Get Category Questions")]
-        public async Task<IActionResult> GetCategoryQuestions(int categoryId, bool randomise = false)
+        public async Task<ActionResult<JsonPagedResult<IEnumerable<Question>>>> GetCategoryQuestions(int categoryId, bool randomise = false)
         {
             var results = await _pageQueriesQuestion.GetAllAsync("Cues");
 
@@ -189,17 +201,17 @@ namespace Mat.Web.Controllers
             
             if (!list.Any())
             {
-                return Json(new JsonPagedResult<IEnumerable<Question>>
+                return new JsonPagedResult<IEnumerable<Question>>
                 {
                     Total = 0
-                });
+                };
             }
 
-            return Json(new JsonPagedResult<IEnumerable<Question>>
+            return new JsonPagedResult<IEnumerable<Question>>
             {
                 Total = list.Count,
                 Rows = list
-            });
+            };
         }
 
         /// <summary>
@@ -208,29 +220,15 @@ namespace Mat.Web.Controllers
         /// <param name="categoryId"></param>
         /// <returns></returns>
         [HttpDelete("/cue/DeleteCategory", Name = "Delete Category")]
-        [IgnoreAntiforgeryToken]
-        public async Task<IActionResult> DeleteCategory(int categoryId)
+
+        public async Task DeleteCategory(int categoryId)
         {
-            if (ModelState.IsValid)
+            var parentExistsResult = _pageQueriesCategory.GetAllAsync("Cues").Result.Where(x => x.ParentCategoryId == categoryId).ToList();
+
+            if (!parentExistsResult.Any())
             {
-                var parentExistsResult = _pageQueriesCategory.GetAllAsync("Cues").Result.Where(x => x.ParentCategoryId == categoryId).ToList();
-
-                if (!parentExistsResult.Any())
-                {
-                    await _pageCommandsCategory.DeleteAsync("Cues", categoryId.ToString());
-                }
-                else
-                {
-                    return Json(new
-                    {
-                        success = "fail",
-                        errorList = $"The category cannot be deleted. At least one category uses this category as a parent category. {string.Join(",", parentExistsResult.Select(x => x.Id))}"
-                    });
-                }
-
-                return Content("success");
+                await _pageCommandsCategory.DeleteAsync("Cues", categoryId.ToString());
             }
-            return Json(new { success = "fail", errorList = JsonConvert.SerializeObject(ModelState.Values.Where(x => x.Errors.Count > 0), Formatting.None, new JsonSerializerSettings { ReferenceLoopHandling = ReferenceLoopHandling.Ignore }) });
         }
 
         /// <summary>
@@ -239,19 +237,18 @@ namespace Mat.Web.Controllers
         /// <param name="question"></param>
         /// <returns></returns>
         [HttpPost("/cue/CreateQuestion", Name = "Create Category Question")]
-        [IgnoreAntiforgeryToken]
+
         public async Task<IActionResult> CreateQuestion(Question question)
         {
-            if (ModelState.IsValid)
-            {
-                var count = _pageQueriesQuestion.GetCountAsync("Cues").Result;
-                question.Id = count + 1;
-                question.Sequence = new Random().Next(0, 100000000);
-                question.InternalName = question.Title.ToSlug();
-                await _pageCommandsQuestion.CreateAsync("Cues", question.Id.ToString(), question);
-                return Content("success");
-            }
-            return Json(new { success = "fail", errorList = JsonConvert.SerializeObject(ModelState.Values.Where(x => x.Errors.Count > 0), Formatting.None, new JsonSerializerSettings { ReferenceLoopHandling = ReferenceLoopHandling.Ignore }) });
+            var count = _pageQueriesQuestion.GetCountAsync("Cues").Result;
+            
+            question.Id = count + 1;
+            question.Sequence = new Random().Next(0, 100000000);
+            question.InternalName = question.Title.ToSlug();
+            
+            await _pageCommandsQuestion.CreateAsync("Cues", question.Id.ToString(), question);
+
+            return CreatedAtAction("GetQuestion", new { id = question.Id }, question);
         }
 
         /// <summary>
@@ -260,33 +257,25 @@ namespace Mat.Web.Controllers
         /// <param name="question"></param>
         /// <returns></returns>
         [HttpPut("/cue/UpdateQuestion", Name = "Update Category Question")]
-        [IgnoreAntiforgeryToken]
+
         public async Task<IActionResult> UpdateQuestion(Question question)
         {
-            if (ModelState.IsValid)
+            var q = _pageQueriesQuestion.FetchAsync("Cues", question.Id.ToString()).Result;
+
+            if (q != null)
             {
-                var q = _pageQueriesQuestion.FetchAsync("Cues", question.Id.ToString()).Result;
-
-                if (q != null)
-                {
-                    q.Title = question.Title;
-                    q.InternalName = q.Title.ToSlug();
-                    q.Answer = question.Answer; 
-                    q.CategoryId = question.CategoryId ?? q.CategoryId;
-                    await _pageCommandsQuestion.UpdateAsync("Cues", q.Id.ToString(), q);
-                }
-                else
-                {
-                    return Json(new
-                    {
-                        success = "fail",
-                        errorList = "Could not find ID"
-                    });
-                }
-
-                return Content("success");
+                q.Title = question.Title;
+                q.InternalName = q.Title.ToSlug();
+                q.Answer = question.Answer;
+                q.CategoryId = question.CategoryId ?? q.CategoryId;
+                await _pageCommandsQuestion.UpdateAsync("Cues", q.Id.ToString(), q);
             }
-            return Json(new { success = "fail", errorList = JsonConvert.SerializeObject(ModelState.Values.Where(x => x.Errors.Count > 0), Formatting.None, new JsonSerializerSettings { ReferenceLoopHandling = ReferenceLoopHandling.Ignore }) });
+            else
+            {
+                return NotFound();
+            }
+
+            return new NoContentResult();
         }
 
         /// <summary>
@@ -294,34 +283,20 @@ namespace Mat.Web.Controllers
         /// </summary>
         /// <returns></returns>
         [HttpPut("/cue/Randomise", Name = "Randomises the Category Questions")]
-        [IgnoreAntiforgeryToken]
-        public IActionResult Randomise()
+
+        public async Task Randomise()
         {
-            if (ModelState.IsValid)
+            var result = _pageQueriesQuestion.GetAllAsync("Cues").Result;
+
+            if (result != null)
             {
-                var result = _pageQueriesQuestion.GetAllAsync("Cues").Result;
-
-                if (result != null)
+                foreach (var question in result)
                 {
-                    foreach (var question in result)
-                    {
-                        var rand = new Random();
-                        question.Sequence = rand.Next(0, 100000000);
-                        _pageCommandsQuestion.UpdateAsync("Cues", question.Id.ToString(), question);
-                    }
+                    var rand = new Random();
+                    question.Sequence = rand.Next(0, 100000000);
+                    await _pageCommandsQuestion.UpdateAsync("Cues", question.Id.ToString(), question);
                 }
-                else
-                {
-                    return Json(new
-                    {
-                        success = "fail",
-                        errorList = "Could not load the questions"
-                    });
-                }
-
-                return Content("success");
             }
-            return Json(new { success = "fail", errorList = JsonConvert.SerializeObject(ModelState.Values.Where(x => x.Errors.Count > 0), Formatting.None, new JsonSerializerSettings { ReferenceLoopHandling = ReferenceLoopHandling.Ignore }) });
         }
 
         /// <summary>
@@ -330,29 +305,15 @@ namespace Mat.Web.Controllers
         /// <param name="questionId"></param>
         /// <returns></returns>
         [HttpDelete("/cue/DeleteQuestion", Name = "Delete Question")]
-        [IgnoreAntiforgeryToken]
-        public async Task<IActionResult> DeleteQuestion(int questionId)
+
+        public async Task DeleteQuestion(int questionId)
         {
-            if (ModelState.IsValid)
+            var result = _pageQueriesQuestion.FetchAsync("Cues", questionId.ToString()).Result;
+
+            if (result != null)
             {
-                var result = _pageQueriesQuestion.FetchAsync("Cues", questionId.ToString()).Result;
-
-                if (result != null)
-                {
-                    await _pageCommandsQuestion.DeleteAsync("Cues", result.Id.ToString());
-                }
-                else
-                {
-                    return Json(new
-                    {
-                        success = "fail",
-                        errorList = "Could not find ID"
-                    });
-                }
-
-                return Content("success");
+                await _pageCommandsQuestion.DeleteAsync("Cues", result.Id.ToString());
             }
-            return Json(new { success = "fail", errorList = JsonConvert.SerializeObject(ModelState.Values.Where(x => x.Errors.Count > 0), Formatting.None, new JsonSerializerSettings { ReferenceLoopHandling = ReferenceLoopHandling.Ignore }) });
         }
     }
 }
